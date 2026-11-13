@@ -3,42 +3,76 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:MusicVisualizer"
         xmlns:controls="clr-namespace:MusicVisualizer.UI.Controls"
         xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
         mc:Ignorable="d"
         Title="Music Visualizer" Height="720" Width="1280"
         Background="{DynamicResource MaterialDesignPaper}"
         TextElement.Foreground="{DynamicResource MaterialDesignBody}"
-        WindowStartupLocation="CenterScreen">
-    
+        WindowStartupLocation="CenterScreen"
+        AllowDrop="True"
+        DragEnter="Window_DragEnter"
+        DragOver="Window_DragOver"
+        Drop="Window_Drop">
+
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="300"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Верхняя панель управления -->
-        <materialDesign:Card Grid.Row="0" Margin="10" Padding="10">
+        <!-- Верхняя панель -->
+        <materialDesign:Card Grid.Row="0" Grid.ColumnSpan="2" Margin="10" Padding="10">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="Открыть файл" Click="OpenFile_Click" Margin="0,0,10,0"/>
+                <Button Content="Добавить в очередь" Click="OpenFile_Click" Margin="0,0,10,0"/>
                 <Button Content="Play" Click="Play_Click" Margin="0,0,5,0"/>
                 <Button Content="Pause" Click="Pause_Click" Margin="0,0,5,0"/>
                 <Button Content="Stop" Click="Stop_Click" Margin="0,0,15,0"/>
-
-                <ComboBox x:Name="ModeSelector" 
-                          Width="200" 
+                <ComboBox x:Name="ModeSelector" Width="220"
                           materialDesign:HintAssist.Hint="Режим визуализации"
                           SelectionChanged="ModeSelector_SelectionChanged"/>
             </StackPanel>
         </materialDesign:Card>
 
-        <!-- Область визуализации -->
-        <controls:SkiaVisualizerControl x:Name="VisualizerControl" Grid.Row="1" />
+        <!-- Визуализация -->
+        <controls:SkiaVisualizerControl x:Name="VisualizerControl" Grid.Row="1" Grid.Column="0" Margin="10,0,0,0"/>
 
-        <!-- Нижняя панель: прогресс и громкость -->
-        <materialDesign:Card Grid.Row="2" Margin="10" Padding="10">
+        <!-- Очередь -->
+        <materialDesign:Card Grid.Row="1" Grid.Column="1" Margin="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Очередь" FontWeight="Bold" Margin="10"/>
+                <ListBox x:Name="PlaylistList" Grid.Row="1"
+                         ItemsSource="{Binding Playlist.Tracks}"
+                         SelectedIndex="{Binding Playlist.CurrentIndex, Mode=TwoWay}"
+                         DisplayMemberPath="Name"
+                         AllowDrop="True"
+                         MouseDoubleClick="PlaylistList_MouseDoubleClick"
+                         PreviewMouseLeftButtonDown="PlaylistList_PreviewMouseLeftButtonDown"
+                         PreviewMouseMove="PlaylistList_PreviewMouseMove"
+                         DragOver="PlaylistList_DragOver"
+                         Drop="PlaylistList_Drop"
+                         KeyDown="PlaylistList_KeyDown"/>
+                <WrapPanel Grid.Row="2" Margin="5">
+                    <Button Content="Удалить" Click="RemoveTrack_Click" Margin="0,0,5,5"/>
+                    <Button Content="Очистить" Click="ClearPlaylist_Click" Margin="0,0,5,5"/>
+                    <Button Content="Сохранить" Click="SavePlaylist_Click" Margin="0,0,5,5"/>
+                    <Button Content="Загрузить" Click="LoadPlaylist_Click" Margin="0,0,0,5"/>
+                </WrapPanel>
+            </Grid>
+        </materialDesign:Card>
+
+        <!-- Нижняя панель -->
+        <materialDesign:Card Grid.Row="2" Grid.ColumnSpan="2" Margin="10" Padding="10">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -49,17 +83,17 @@
                 <TextBlock x:Name="TimeLabel" Text="00:00 / 00:00" VerticalAlignment="Center" Margin="0,0,10,0"/>
 
                 <Slider x:Name="ProgressSlider"
-        Grid.Column="1"
-        Minimum="0" Maximum="1"
-        VerticalAlignment="Center"
-        IsMoveToPointEnabled="True"
-        ValueChanged="ProgressSlider_ValueChanged"/>
+                        Grid.Column="1"
+                        Minimum="0" Maximum="1"
+                        VerticalAlignment="Center"
+                        IsMoveToPointEnabled="True"
+                        ValueChanged="ProgressSlider_ValueChanged"/>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="Громкость:" VerticalAlignment="Center" Margin="0,0,5,0"/>
                     <Slider x:Name="VolumeSlider" Width="150"
-                    Minimum="0" Maximum="1" Value="0.5"
-                    ValueChanged="VolumeSlider_ValueChanged"/>
+                            Minimum="0" Maximum="1" Value="0.5"
+                            ValueChanged="VolumeSlider_ValueChanged"/>
                 </StackPanel>
             </Grid>
         </materialDesign:Card>

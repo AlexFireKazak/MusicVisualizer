@@ -9,7 +9,10 @@ namespace MusicVisualizer.Core
         private WaveOutEvent? _waveOut;
         private VisualizationSampleProvider? _visualizerProvider;
         private float _volume = 0.5f;
+        private bool _userStop;
         private bool _isDisposed;
+
+        public event EventHandler? TrackEnded;
 
         public bool IsPlaying => _waveOut?.PlaybackState == PlaybackState.Playing;
         public TimeSpan Position => _waveStream?.CurrentTime ?? TimeSpan.Zero;
@@ -31,10 +34,10 @@ namespace MusicVisualizer.Core
                 _ => new MediaFoundationReader(filePath)
             };
 
-            var sampleProvider = _waveStream.ToSampleProvider();
-            _visualizerProvider = new VisualizationSampleProvider(sampleProvider);
+            _visualizerProvider = new VisualizationSampleProvider(_waveStream.ToSampleProvider());
 
             _waveOut = new WaveOutEvent();
+            _waveOut.PlaybackStopped += OnPlaybackStopped;
             _waveOut.Init(_visualizerProvider);
             _waveOut.Volume = _volume;
         }
@@ -53,43 +56,80 @@ namespace MusicVisualizer.Core
 
         public void Stop()
         {
-            if (_waveOut != null)
-            {
-                _waveOut.Stop();
-                if (_waveStream != null)
-                    _waveStream.CurrentTime = TimeSpan.Zero;
-            }
+            if (_waveOut == null) return;
+            _userStop = true;
+            try { _waveOut.Stop(); }
+            finally { _userStop = false; }
+            if (_waveStream != null) _waveStream.CurrentTime = TimeSpan.Zero;
+        }
+
+        public void Unload()
+        {
+            Stop();
+            DisposeWaveOut();
+            _waveStream?.Dispose();
+            _waveStream = null;
+            _visualizerProvider = null;
         }
 
         public void SetVolume(float volume)
         {
             _volume = Math.Clamp(volume, 0f, 1f);
-            if (_waveOut != null)
-                _waveOut.Volume = _volume;
+            if (_waveOut != null) _waveOut.Volume = _volume;
         }
 
         public void Seek(TimeSpan position)
         {
             if (_waveStream == null) return;
-            var clamped = position < TimeSpan.Zero ? TimeSpan.Zero
-                        : position > _waveStream.TotalTime ? _waveStream.TotalTime
-                        : position;
+            var total = _waveStream.TotalTime;
+            if (total.TotalSeconds <= 0) return;
+
+            // «В самом конце» — старт с начала. Иначе VBR-seek уходит за последний фрейм.
+            if (total - position < TimeSpan.FromSeconds(2))
+            {
+                _waveStream.CurrentTime = TimeSpan.Zero;
+                return;
+            }
+
+            var clamped = position < TimeSpan.Zero ? TimeSpan.Zero : position;
+            if (clamped > total) clamped = total;
+
             _waveStream.CurrentTime = clamped;
+
+            // Верификация: если фактическая позиция далека от запрошенной — сброс на 0
+            var actual = _waveStream.CurrentTime;
+            if ((actual - clamped).Duration() > TimeSpan.FromSeconds(2))
+                _waveStream.CurrentTime = TimeSpan.Zero;
+        }
+
+        private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
+        {
+            if (_isDisposed || _userStop || e.Exception != null) return;
+            if (_waveStream == null) return;
+
+            // Защита от гонки: событие от NAudio приходит с аудио-потока.
+            // Считаем «естественным окончанием» только если позиция у конца.
+            var remaining = _waveStream.TotalTime - _waveStream.CurrentTime;
+            if (remaining.TotalSeconds > 0.5) return;
+
+            TrackEnded?.Invoke(this, EventArgs.Empty);
         }
 
         private void DisposeWaveOut()
         {
-            _waveOut?.Dispose();
+            if (_waveOut == null) return;
+            _waveOut.PlaybackStopped -= OnPlaybackStopped;
+            _waveOut.Dispose();
             _waveOut = null;
         }
 
         public void Dispose()
         {
             if (_isDisposed) return;
+            _isDisposed = true;
             Stop();
             DisposeWaveOut();
             _waveStream?.Dispose();
-            _isDisposed = true;
         }
     }
 }

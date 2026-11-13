@@ -57,5 +57,14 @@ namespace MusicVisualizer.UI.Controls
             else
                 _currentMode.Render(canvas, w, h, _audioData, _fftData);
         }
+
+        public void ClearData()
+        {
+            _audioData = new float[512];
+            _fftData = new float[512];
+            _stereoLeft = Array.Empty<float>();
+            _stereoRight = Array.Empty<float>();
+            InvalidateVisual();
+        }
     }
 }
