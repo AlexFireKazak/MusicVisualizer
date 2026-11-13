@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace MusicVisualizer.ViewModels
@@ -22,6 +23,7 @@ namespace MusicVisualizer.ViewModels
         private double _progress;
         private LoopMode _loopMode = LoopMode.Off;
         private bool _shuffle;
+        private bool _isLoading;
 
         public PlaylistViewModel Playlist { get; } = new();
         public AudioEngine Engine => _engine;
@@ -32,6 +34,21 @@ namespace MusicVisualizer.ViewModels
         public string Title { get => _title; private set => Set(ref _title, value); }
         public string TimeText { get => _timeText; private set => Set(ref _timeText, value); }
         public double Progress { get => _progress; private set => Set(ref _progress, value); }
+
+        public bool IsLoading
+        {
+            get => _isLoading;
+            private set
+            {
+                if (_isLoading == value) return;
+                _isLoading = value;
+                OnPropertyChanged(nameof(IsLoading));
+                OnPropertyChanged(nameof(CanPlay));
+            }
+        }
+
+        /// <summary>Инверсия IsLoading для привязки к IsEnabled кнопок Play/Pause/Stop.</summary>
+        public bool CanPlay => !_isLoading;
 
         public LoopMode LoopMode
         {
@@ -54,21 +71,32 @@ namespace MusicVisualizer.ViewModels
         public PlaybackViewModel()
         {
             _engine.TrackEnded += OnEngineTrackEnded;
+            _engine.PlaybackError += OnEnginePlaybackError;
             Playlist.Tracks.CollectionChanged += (_, _) => _shufflePlayed.Clear();
         }
 
         private void OnEngineTrackEnded(object? sender, EventArgs e)
         {
-            Application.Current.Dispatcher.Invoke(PlayNext);
+            Application.Current.Dispatcher.InvokeAsync(async () => await PlayNext());
         }
 
-        public void PlayNext()
+        private void OnEnginePlaybackError(object? sender, PlaybackErrorEventArgs args)
+        {
+            Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                MessageBox.Show($"Ошибка воспроизведения: {args.Exception.Message}", "Ошибка",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                _engine.Stop();
+            });
+        }
+
+        public async Task PlayNext()
         {
             if (Playlist.Tracks.Count == 0) return;
 
             if (LoopMode == LoopMode.One)
             {
-                PlayAtInternal(Playlist.CurrentIndex, autoPlay: true,
+                await PlayAtInternal(Playlist.CurrentIndex, autoPlay: true,
                                startPosition: null, resetShuffleCycle: false);
                 return;
             }
@@ -77,7 +105,7 @@ namespace MusicVisualizer.ViewModels
 
             if (Shuffle)
             {
-                PlayShuffleNext(count);
+                await PlayShuffleNextAsync(count);
                 return;
             }
 
@@ -87,10 +115,10 @@ namespace MusicVisualizer.ViewModels
                 if (LoopMode == LoopMode.All) next = 0;
                 else { _engine.Stop(); return; }
             }
-            PlayAtInternal(next, autoPlay: true, startPosition: null, resetShuffleCycle: false);
+            await PlayAtInternal(next, autoPlay: true, startPosition: null, resetShuffleCycle: false);
         }
 
-        private void PlayShuffleNext(int count)
+        private async Task PlayShuffleNextAsync(int count)
         {
             var candidates = Enumerable.Range(0, count)
                 .Where(i => !_shufflePlayed.Contains(i))
@@ -116,13 +144,13 @@ namespace MusicVisualizer.ViewModels
 
             int nextIdx = candidates[_rand.Next(candidates.Count)];
             _shufflePlayed.Add(nextIdx);
-            PlayAtInternal(nextIdx, autoPlay: true, startPosition: null, resetShuffleCycle: false);
+            await PlayAtInternal(nextIdx, autoPlay: true, startPosition: null, resetShuffleCycle: false);
         }
 
-        public void PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null) =>
+        public Task PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null) =>
             PlayAtInternal(index, autoPlay, startPosition, resetShuffleCycle: true);
 
-        private void PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition, bool resetShuffleCycle)
+        private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition, bool resetShuffleCycle)
         {
             if (index < 0 || index >= Playlist.Tracks.Count) return;
             Playlist.CurrentIndex = index;
@@ -134,10 +162,12 @@ namespace MusicVisualizer.ViewModels
             }
 
             var track = Playlist.Tracks[index];
+            IsLoading = true;
+            Title = "Загрузка…";
             try
             {
                 _analyzer.Reset();
-                _engine.LoadFile(track.FilePath);
+                await _engine.LoadFileAsync(track.FilePath);
 
                 if (startPosition.HasValue && startPosition.Value > TimeSpan.Zero)
                     _engine.Seek(startPosition.Value);
@@ -148,8 +178,13 @@ namespace MusicVisualizer.ViewModels
             }
             catch (Exception ex)
             {
+                Title = "Music Visualizer";
                 MessageBox.Show($"Ошибка загрузки файла: {ex.Message}", "Ошибка",
                     MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsLoading = false;
             }
         }
 

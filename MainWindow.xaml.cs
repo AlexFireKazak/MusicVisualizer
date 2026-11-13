@@ -1,15 +1,16 @@
-﻿using System;
+﻿using Microsoft.Win32;
+using MusicVisualizer.Core;
+using MusicVisualizer.ViewModels;
+using MusicVisualizer.Visualizations;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using Microsoft.Win32;
-using MusicVisualizer.Core;
-using MusicVisualizer.ViewModels;
-using MusicVisualizer.Visualizations;
 
 namespace MusicVisualizer
 {
@@ -51,26 +52,30 @@ namespace MusicVisualizer
                 foreach (var m in _modes) m.Reset();
             };
 
-            RestoreState();
+            Loaded += Window_Loaded;
 
             CompositionTarget.Rendering += OnRendering;
             Closed += OnClosed;
         }
 
-        private void RestoreState()
+        private async void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            await RestoreStateAsync();
+        }
+
+        private async Task RestoreStateAsync()
         {
             var state = _stateService.Load();
 
             VolumeSlider.Value = Math.Clamp(state.Volume, 0, 1);
+
             if (Enum.TryParse<LoopMode>(state.LoopMode, out var lm)) _vm.LoopMode = lm;
             _vm.Shuffle = state.Shuffle;
             UpdateLoopButton();
             UpdateShuffleButton();
 
             if (state.PlaylistPaths.Count > 0)
-            {
                 _vm.Playlist.AddFiles(state.PlaylistPaths.Where(File.Exists));
-            }
 
             var viz = _modes.FirstOrDefault(m => m.Name == state.VisualizationName) ?? _modes.FirstOrDefault();
             if (viz != null)
@@ -81,35 +86,9 @@ namespace MusicVisualizer
 
             if (_vm.Playlist.Tracks.Count > 0)
             {
-                int targetIndex = -1;
-                bool sameTrackFound = false;
+                var (targetIndex, startPos) = PlaylistRestorer.Compute(_vm.Playlist.Tracks, state);
 
-                if (!string.IsNullOrEmpty(state.CurrentTrackPath))
-                {
-                    for (int i = 0; i < _vm.Playlist.Tracks.Count; i++)
-                    {
-                        if (string.Equals(_vm.Playlist.Tracks[i].FilePath, state.CurrentTrackPath,
-                                          StringComparison.OrdinalIgnoreCase))
-                        {
-                            targetIndex = i;
-                            sameTrackFound = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (targetIndex < 0)
-                {
-                    // Сохранённый трек отсутствует (удалён) — играем по «следующему» индексу,
-                    // но всегда с начала
-                    targetIndex = Math.Clamp(state.CurrentIndex, 0, _vm.Playlist.Tracks.Count - 1);
-                }
-
-                var startPos = sameTrackFound
-                    ? TimeSpan.FromSeconds(Math.Max(0, state.PositionSeconds))
-                    : TimeSpan.Zero;
-
-                _vm.PlayAt(targetIndex, autoPlay: false, startPosition: startPos);
+                await _vm.PlayAt(targetIndex, autoPlay: false, startPosition: startPos);
                 PlaylistList.SelectedIndex = targetIndex;
 
                 _vm.UpdateFromRendering();
@@ -167,7 +146,7 @@ namespace MusicVisualizer
 
         // ─── Верхняя панель ──────────────────────────────────────────
 
-        private void OpenFile_Click(object sender, RoutedEventArgs e)
+        private async void OpenFile_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new OpenFileDialog
             {
@@ -176,15 +155,15 @@ namespace MusicVisualizer
                 Title = "Выберите аудиофайлы"
             };
             if (dialog.ShowDialog() != true) return;
-            AddFilesToPlaylist(dialog.FileNames);
+            await AddFilesToPlaylistAsync(dialog.FileNames);
         }
 
-        private void AddFilesToPlaylist(IEnumerable<string> paths)
+        private async Task AddFilesToPlaylistAsync(IEnumerable<string> paths)
         {
             bool wasEmpty = _vm.Playlist.Tracks.Count == 0;
             _vm.Playlist.AddFiles(paths);
             if (wasEmpty && _vm.Playlist.Tracks.Count > 0)
-                _vm.PlayAt(0);
+                await _vm.PlayAt(0);
         }
 
         private void Play_Click(object sender, RoutedEventArgs e) => _vm.Play();
@@ -208,16 +187,16 @@ namespace MusicVisualizer
 
         // ─── Очередь ────────────────────────────────────────────────
 
-        private void PlaylistList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        private async void PlaylistList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (PlaylistList.SelectedIndex >= 0)
-                _vm.PlayAt(PlaylistList.SelectedIndex);
+                await _vm.PlayAt(PlaylistList.SelectedIndex);
         }
 
-        private void RemoveTrack_Click(object sender, RoutedEventArgs e) =>
-    DeleteTrackAt(PlaylistList.SelectedIndex);
+        private async void RemoveTrack_Click(object sender, RoutedEventArgs e) =>
+    await DeleteTrackAt(PlaylistList.SelectedIndex);
 
-        private void DeleteTrackAt(int index)
+        private async Task DeleteTrackAt(int index)
         {
             if (index < 0 || index >= _vm.Playlist.Tracks.Count) return;
 
@@ -235,9 +214,9 @@ namespace MusicVisualizer
             if (wasCurrent)
             {
                 int newIdx = Math.Clamp(_vm.Playlist.CurrentIndex, 0, _vm.Playlist.Tracks.Count - 1);
-                _vm.PlayAt(newIdx, autoPlay: wasPlaying);
+                await _vm.PlayAt(newIdx, autoPlay: wasPlaying);
             }
-            // В любом случае возвращаем выделение на текущий играющий трек
+
             PlaylistList.SelectedIndex = _vm.Playlist.CurrentIndex;
         }
 
@@ -274,7 +253,7 @@ namespace MusicVisualizer
             }
         }
 
-        private void LoadPlaylist_Click(object sender, RoutedEventArgs e)
+        private async void LoadPlaylist_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new OpenFileDialog
             {
@@ -295,7 +274,7 @@ namespace MusicVisualizer
                 _vm.Playlist.Clear();
                 _vm.Playlist.AddFiles(paths);
                 if (_vm.Playlist.Tracks.Count > 0)
-                    _vm.PlayAt(0);
+                    await _vm.PlayAt(0);
             }
             catch (Exception ex)
             {
@@ -316,13 +295,13 @@ namespace MusicVisualizer
 
         private void Window_DragOver(object sender, DragEventArgs e) => Window_DragEnter(sender, e);
 
-        private void Window_Drop(object sender, DragEventArgs e)
+        private async void Window_Drop(object sender, DragEventArgs e)
         {
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
             var files = ((string[])e.Data.GetData(DataFormats.FileDrop))
                 .Where(IsAudioFile)
                 .ToArray();
-            if (files.Length > 0) AddFilesToPlaylist(files);
+            if (files.Length > 0) await AddFilesToPlaylistAsync(files);
         }
 
         private static bool IsAudioFile(string path)
@@ -362,7 +341,7 @@ namespace MusicVisualizer
             e.Handled = true;
         }
 
-        private void PlaylistList_Drop(object sender, DragEventArgs e)
+        private async Task PlaylistList_Drop(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(typeof(TrackItem)) && _dragSourceIndex >= 0)
             {
@@ -374,7 +353,7 @@ namespace MusicVisualizer
             {
                 var files = ((string[])e.Data.GetData(DataFormats.FileDrop))
                     .Where(IsAudioFile).ToArray();
-                if (files.Length > 0) AddFilesToPlaylist(files);
+                if (files.Length > 0) await AddFilesToPlaylistAsync(files);
             }
 
             _dragSourceIndex = -1;

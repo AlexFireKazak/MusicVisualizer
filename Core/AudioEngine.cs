@@ -1,10 +1,15 @@
 ﻿using NAudio.Wave;
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MusicVisualizer.Core
 {
     public class AudioEngine : IDisposable
     {
+        private readonly object _loadLock = new();
+        private CancellationTokenSource _loadCts = new();
+
         private WaveStream? _waveStream;
         private WaveOutEvent? _waveOut;
         private VisualizationSampleProvider? _visualizerProvider;
@@ -13,29 +18,62 @@ namespace MusicVisualizer.Core
         private bool _isDisposed;
 
         public event EventHandler? TrackEnded;
+        public event EventHandler<PlaybackErrorEventArgs>? PlaybackError;
 
         public bool IsPlaying => _waveOut?.PlaybackState == PlaybackState.Playing;
         public TimeSpan Position => _waveStream?.CurrentTime ?? TimeSpan.Zero;
         public TimeSpan TotalTime => _waveStream?.TotalTime ?? TimeSpan.Zero;
         public VisualizationSampleProvider? VisualizerProvider => _visualizerProvider;
 
-        public void LoadFile(string filePath)
+        /// <summary>
+        /// Асинхронная загрузка: тяжёлое сканирование Mp3FileReader / MFReader уходит
+        /// в Task.Run. Предыдущая незавершённая загрузка отменяется.
+        /// </summary>
+        public async Task LoadFileAsync(string filePath)
         {
+            CancellationToken token;
+            lock (_loadLock)
+            {
+                _loadCts.Cancel();
+                _loadCts.Dispose();
+                _loadCts = new CancellationTokenSource();
+                token = _loadCts.Token;
+            }
+
             Stop();
             DisposeWaveOut();
             _waveStream?.Dispose();
+            _waveStream = null;
 
-            string ext = System.IO.Path.GetExtension(filePath).ToLowerInvariant();
-            _waveStream = ext switch
+            WaveStream? stream = null;
+            try
             {
-                ".wav" => new WaveFileReader(filePath),
-                ".mp3" => new Mp3FileReader(filePath),
-                ".aiff" or ".aif" => new AiffFileReader(filePath),
-                _ => new MediaFoundationReader(filePath)
-            };
+                stream = await Task.Run(() =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    string ext = System.IO.Path.GetExtension(filePath).ToLowerInvariant();
+                    return ext switch
+                    {
+                        ".wav" => (WaveStream)new WaveFileReader(filePath),
+                        ".mp3" => new Mp3FileReader(filePath),
+                        ".aiff" or ".aif" => new AiffFileReader(filePath),
+                        _ => new MediaFoundationReader(filePath)
+                    };
+                }, token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
 
+            if (token.IsCancellationRequested)
+            {
+                stream?.Dispose();
+                return;
+            }
+
+            _waveStream = stream;
             _visualizerProvider = new VisualizationSampleProvider(_waveStream.ToSampleProvider());
-
             _waveOut = new WaveOutEvent();
             _waveOut.PlaybackStopped += OnPlaybackStopped;
             _waveOut.Init(_visualizerProvider);
@@ -84,7 +122,6 @@ namespace MusicVisualizer.Core
             var total = _waveStream.TotalTime;
             if (total.TotalSeconds <= 0) return;
 
-            // «В самом конце» — старт с начала. Иначе VBR-seek уходит за последний фрейм.
             if (total - position < TimeSpan.FromSeconds(2))
             {
                 _waveStream.CurrentTime = TimeSpan.Zero;
@@ -96,7 +133,6 @@ namespace MusicVisualizer.Core
 
             _waveStream.CurrentTime = clamped;
 
-            // Верификация: если фактическая позиция далека от запрошенной — сброс на 0
             var actual = _waveStream.CurrentTime;
             if ((actual - clamped).Duration() > TimeSpan.FromSeconds(2))
                 _waveStream.CurrentTime = TimeSpan.Zero;
@@ -104,11 +140,17 @@ namespace MusicVisualizer.Core
 
         private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
         {
-            if (_isDisposed || _userStop || e.Exception != null) return;
+            if (_isDisposed) return;
+
+            if (e.Exception != null)
+            {
+                PlaybackError?.Invoke(this, new PlaybackErrorEventArgs(e.Exception));
+                return;
+            }
+
+            if (_userStop) return;
             if (_waveStream == null) return;
 
-            // Защита от гонки: событие от NAudio приходит с аудио-потока.
-            // Считаем «естественным окончанием» только если позиция у конца.
             var remaining = _waveStream.TotalTime - _waveStream.CurrentTime;
             if (remaining.TotalSeconds > 0.5) return;
 
@@ -127,6 +169,8 @@ namespace MusicVisualizer.Core
         {
             if (_isDisposed) return;
             _isDisposed = true;
+            _loadCts.Cancel();
+            _loadCts.Dispose();
             Stop();
             DisposeWaveOut();
             _waveStream?.Dispose();
