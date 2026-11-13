@@ -301,7 +301,8 @@ namespace MusicVisualizer
             var files = ((string[])e.Data.GetData(DataFormats.FileDrop))
                 .Where(IsAudioFile)
                 .ToArray();
-            if (files.Length > 0) await AddFilesToPlaylistAsync(files);
+            if (files.Length > 0)
+                await AddFilesToPlaylistAsync(files);
         }
 
         private static bool IsAudioFile(string path)
@@ -341,7 +342,7 @@ namespace MusicVisualizer
             e.Handled = true;
         }
 
-        private async Task PlaylistList_Drop(object sender, DragEventArgs e)
+        private async void PlaylistList_Drop(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(typeof(TrackItem)) && _dragSourceIndex >= 0)
             {
@@ -353,7 +354,8 @@ namespace MusicVisualizer
             {
                 var files = ((string[])e.Data.GetData(DataFormats.FileDrop))
                     .Where(IsAudioFile).ToArray();
-                if (files.Length > 0) await AddFilesToPlaylistAsync(files);
+                if (files.Length > 0)
+                    await AddFilesToPlaylistAsync(files);
             }
 
             _dragSourceIndex = -1;
