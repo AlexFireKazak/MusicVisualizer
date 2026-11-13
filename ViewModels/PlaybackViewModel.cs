@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -150,45 +151,76 @@ namespace MusicVisualizer.ViewModels
         public Task PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null) =>
             PlayAtInternal(index, autoPlay, startPosition, resetShuffleCycle: true);
 
-        private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition, bool resetShuffleCycle)
+
+private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition, bool resetShuffleCycle)
+    {
+        // Пропускаем отсутствующие файлы, не вызывая LoadFileAsync
+        var missing = new List<string>();
+        while (index >= 0 && index < Playlist.Tracks.Count)
         {
-            if (index < 0 || index >= Playlist.Tracks.Count) return;
-            Playlist.CurrentIndex = index;
+            if (File.Exists(Playlist.Tracks[index].FilePath)) break;
 
-            if (resetShuffleCycle && Shuffle)
-            {
-                _shufflePlayed.Clear();
-                _shufflePlayed.Add(index);
-            }
-
-            var track = Playlist.Tracks[index];
-            IsLoading = true;
-            Title = "Загрузка…";
-            try
-            {
-                _analyzer.Reset();
-                await _engine.LoadFileAsync(track.FilePath);
-
-                if (startPosition.HasValue && startPosition.Value > TimeSpan.Zero)
-                    _engine.Seek(startPosition.Value);
-
-                if (autoPlay) _engine.Play();
-                Title = $"Music Visualizer - {track.Name}";
-                TrackChanged?.Invoke(this, EventArgs.Empty);
-            }
-            catch (Exception ex)
-            {
-                Title = "Music Visualizer";
-                MessageBox.Show($"Ошибка загрузки файла: {ex.Message}", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                IsLoading = false;
-            }
+            missing.Add(Playlist.Tracks[index].Name);
+            Playlist.RemoveAt(index);
+            if (index >= Playlist.Tracks.Count) index = Playlist.Tracks.Count - 1;
         }
 
-        public void ClearPlaylist()
+        if (missing.Count > 0)
+        {
+            MessageBox.Show(
+                "Следующие файлы не найдены и удалены из очереди:\n\n" +
+                string.Join("\n", missing),
+                "Файлы не найдены", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        if (index < 0 || index >= Playlist.Tracks.Count)
+        {
+            // Ничего не осталось — чистим состояние, но очередь уже пуста
+            _engine.Unload();
+            _analyzer.Reset();
+            Progress = 0;
+            TimeText = "00:00 / 00:00";
+            Title = "Music Visualizer";
+            TrackChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        Playlist.CurrentIndex = index;
+
+        if (resetShuffleCycle && Shuffle)
+        {
+            _shufflePlayed.Clear();
+            _shufflePlayed.Add(index);
+        }
+
+        var track = Playlist.Tracks[index];
+        IsLoading = true;
+        Title = "Загрузка…";
+        try
+        {
+            _analyzer.Reset();
+            await _engine.LoadFileAsync(track.FilePath);
+
+            if (startPosition.HasValue && startPosition.Value > TimeSpan.Zero)
+                _engine.Seek(startPosition.Value);
+
+            if (autoPlay) _engine.Play();
+            Title = $"Music Visualizer - {track.Name}";
+            TrackChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            Title = "Music Visualizer";
+            MessageBox.Show($"Ошибка загрузки файла: {ex.Message}", "Ошибка",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public void ClearPlaylist()
         {
             _engine.Unload();
             _analyzer.Reset();

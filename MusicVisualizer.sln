@@ -1,9 +1,11 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.14.37710.0 d17.14
+VisualStudioVersion = 17.14.37710.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MusicVisualizer", "MusicVisualizer.csproj", "{6B72E16C-5E16-4DD8-8741-5B0AB28A4EFB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MusicVisualizer.Tests", "..\MusicVisualizer.Tests\MusicVisualizer.Tests.csproj", "{032129C5-E483-4798-963A-CF4B5656F3BC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +17,10 @@ Global
 		{6B72E16C-5E16-4DD8-8741-5B0AB28A4EFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6B72E16C-5E16-4DD8-8741-5B0AB28A4EFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6B72E16C-5E16-4DD8-8741-5B0AB28A4EFB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{032129C5-E483-4798-963A-CF4B5656F3BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{032129C5-E483-4798-963A-CF4B5656F3BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{032129C5-E483-4798-963A-CF4B5656F3BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{032129C5-E483-4798-963A-CF4B5656F3BC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
