@@ -258,13 +258,13 @@ namespace MusicVisualizer
         {
             var dialog = new SaveFileDialog
             {
-                Filter = "Music Visualizer Playlist|*.mvpl|JSON|*.json",
-                FileName = "playlist.mvpl"
+                Filter = "M3U Playlist|*.m3u",
+                FileName = "playlist.m3u"
             };
             if (dialog.ShowDialog() != true) return;
             try
             {
-                _stateService.SavePlaylist(dialog.FileName,
+                M3UService.Save(dialog.FileName,
                     _vm.Playlist.Tracks.Select(t => t.FilePath));
             }
             catch (Exception ex)
@@ -278,13 +278,19 @@ namespace MusicVisualizer
         {
             var dialog = new OpenFileDialog
             {
-                Filter = "Music Visualizer Playlist|*.mvpl|JSON|*.json",
+                Filter = "M3U Playlist|*.m3u",
                 Title = "Загрузить плейлист"
             };
             if (dialog.ShowDialog() != true) return;
             try
             {
-                var paths = _stateService.LoadPlaylist(dialog.FileName).Where(File.Exists);
+                var paths = M3UService.Load(dialog.FileName);
+                if (paths.Count == 0)
+                {
+                    MessageBox.Show("Плейлист пуст или все файлы отсутствуют.",
+                        "Плейлист", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
                 _vm.Stop();
                 _vm.Playlist.Clear();
                 _vm.Playlist.AddFiles(paths);
