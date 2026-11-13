@@ -18,6 +18,8 @@ namespace MusicVisualizer.ViewModels
         private readonly AudioAnalyzer _analyzer = new();
         private readonly Random _rand = new();
         private readonly HashSet<int> _shufflePlayed = new();
+        private readonly Stack<int> _history = new();
+        private bool _isPlaying;
 
         private string _title = "Music Visualizer";
         private string _timeText = "00:00 / 00:00";
@@ -45,6 +47,17 @@ namespace MusicVisualizer.ViewModels
                 _isLoading = value;
                 OnPropertyChanged(nameof(IsLoading));
                 OnPropertyChanged(nameof(CanPlay));
+            }
+        }
+
+        public bool IsPlaying
+        {
+            get => _isPlaying;
+            private set
+            {
+                if (_isPlaying == value) return;
+                _isPlaying = value;
+                OnPropertyChanged();
             }
         }
 
@@ -98,7 +111,7 @@ namespace MusicVisualizer.ViewModels
             if (LoopMode == LoopMode.One)
             {
                 await PlayAtInternal(Playlist.CurrentIndex, autoPlay: true,
-                               startPosition: null, resetShuffleCycle: false);
+                               startPosition: null, resetShuffleCycle: false, recordHistory: false);
                 return;
             }
 
@@ -116,7 +129,7 @@ namespace MusicVisualizer.ViewModels
                 if (LoopMode == LoopMode.All) next = 0;
                 else { _engine.Stop(); return; }
             }
-            await PlayAtInternal(next, autoPlay: true, startPosition: null, resetShuffleCycle: false);
+            await PlayAtInternal(next, autoPlay: true, startPosition: null, resetShuffleCycle: false, recordHistory: true);
         }
 
         private async Task PlayShuffleNextAsync(int count)
@@ -145,15 +158,19 @@ namespace MusicVisualizer.ViewModels
 
             int nextIdx = candidates[_rand.Next(candidates.Count)];
             _shufflePlayed.Add(nextIdx);
-            await PlayAtInternal(nextIdx, autoPlay: true, startPosition: null, resetShuffleCycle: false);
+            await PlayAtInternal(nextIdx, autoPlay: true, startPosition: null, resetShuffleCycle: false, recordHistory: true);
         }
 
-        public Task PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null) =>
-            PlayAtInternal(index, autoPlay, startPosition, resetShuffleCycle: true);
+        public Task PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null)
+        {
+            _history.Clear();
+            return PlayAtInternal(index, autoPlay, startPosition, resetShuffleCycle: true, recordHistory: false);
+        }
 
 
-private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition, bool resetShuffleCycle)
-    {
+        private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition,
+                                   bool resetShuffleCycle, bool recordHistory)
+        {
         // Пропускаем отсутствующие файлы, не вызывая LoadFileAsync
         var missing = new List<string>();
         while (index >= 0 && index < Playlist.Tracks.Count)
@@ -165,7 +182,10 @@ private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosit
             if (index >= Playlist.Tracks.Count) index = Playlist.Tracks.Count - 1;
         }
 
-        if (missing.Count > 0)
+            if (recordHistory && Playlist.CurrentIndex >= 0 && Playlist.CurrentIndex != index)
+                _history.Push(Playlist.CurrentIndex);
+
+            if (missing.Count > 0)
         {
             MessageBox.Show(
                 "Следующие файлы не найдены и удалены из очереди:\n\n" +
@@ -200,12 +220,14 @@ private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosit
         {
             _analyzer.Reset();
             await _engine.LoadFileAsync(track.FilePath);
+                track.Duration = _engine.TotalTime;
 
-            if (startPosition.HasValue && startPosition.Value > TimeSpan.Zero)
+                if (startPosition.HasValue && startPosition.Value > TimeSpan.Zero)
                 _engine.Seek(startPosition.Value);
 
             if (autoPlay) _engine.Play();
-            Title = $"Music Visualizer - {track.Name}";
+                IsPlaying = _engine.IsPlaying;
+                Title = $"Music Visualizer - {track.Name}";
             TrackChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
@@ -226,15 +248,17 @@ private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosit
             _analyzer.Reset();
             Playlist.Clear();
             _shufflePlayed.Clear();
+            _history.Clear();
             Progress = 0;
             TimeText = "00:00 / 00:00";
             Title = "Music Visualizer";
+            IsPlaying = false;
             TrackChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        public void Play() => _engine.Play();
-        public void Pause() => _engine.Pause();
-        public void Stop() => _engine.Stop();
+        public void Play() { _engine.Play(); IsPlaying = true; }
+        public void Pause() { _engine.Pause(); IsPlaying = false; }
+        public void Stop() { _engine.Stop(); IsPlaying = false; }
         public void SetVolume(float v) => _engine.SetVolume(v);
 
         public void Seek(double ratio)
@@ -255,6 +279,7 @@ private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosit
 
         public void UpdateFromRendering()
         {
+            IsPlaying = _engine.IsPlaying;
             var total = _engine.TotalTime.TotalSeconds;
             if (total <= 0) return;
             Progress = _engine.Position.TotalSeconds / total;
@@ -279,5 +304,44 @@ private async Task PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosit
 
         private void OnPropertyChanged([CallerMemberName] string? name = null) =>
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+        public async Task PlayPrevious()
+        {
+            if (Playlist.Tracks.Count == 0) return;
+
+            // Стандарт плееров: если играет больше 3 секунд — «назад» перезапускает трек
+            if (_engine.Position.TotalSeconds > 3)
+            {
+                _engine.Seek(TimeSpan.Zero);
+                UpdateFromRendering();
+                return;
+            }
+
+            // Сначала — история переходов (работает и в shuffle)
+            if (_history.Count > 0)
+            {
+                int prev = _history.Pop();
+                await PlayAtInternal(prev, autoPlay: true, startPosition: null,
+                                     resetShuffleCycle: false, recordHistory: false);
+                return;
+            }
+
+            // Истории нет — идём по индексу с учётом Loop
+            int current = Playlist.CurrentIndex;
+            int prevIdx = current - 1;
+            if (prevIdx < 0)
+            {
+                if (LoopMode == LoopMode.All)
+                    prevIdx = Playlist.Tracks.Count - 1;
+                else
+                {
+                    _engine.Seek(TimeSpan.Zero);
+                    UpdateFromRendering();
+                    return;
+                }
+            }
+            await PlayAtInternal(prevIdx, autoPlay: true, startPosition: null,
+                                 resetShuffleCycle: false, recordHistory: false);
+        }
     }
 }

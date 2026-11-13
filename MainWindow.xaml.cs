@@ -1,9 +1,6 @@
-﻿using Microsoft.Win32;
-using MusicVisualizer.Core;
-using MusicVisualizer.ViewModels;
-using MusicVisualizer.Visualizations;
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -11,6 +8,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Microsoft.Win32;
+using MusicVisualizer.Core;
+using MusicVisualizer.ViewModels;
+using MusicVisualizer.Visualizations;
 
 namespace MusicVisualizer
 {
@@ -28,8 +29,6 @@ namespace MusicVisualizer
         {
             InitializeComponent();
             DataContext = _vm;
-            UpdateLoopButton();
-            UpdateShuffleButton();
 
             _modes.Add(new SpectrumBarsMode());
             _modes.Add(new MirroredBarsMode());
@@ -53,15 +52,12 @@ namespace MusicVisualizer
             };
 
             Loaded += Window_Loaded;
-
             CompositionTarget.Rendering += OnRendering;
             Closed += OnClosed;
         }
 
-        private async void Window_Loaded(object sender, RoutedEventArgs e)
-        {
+        private async void Window_Loaded(object sender, RoutedEventArgs e) =>
             await RestoreStateAsync();
-        }
 
         private async Task RestoreStateAsync()
         {
@@ -71,8 +67,6 @@ namespace MusicVisualizer
 
             if (Enum.TryParse<LoopMode>(state.LoopMode, out var lm)) _vm.LoopMode = lm;
             _vm.Shuffle = state.Shuffle;
-            UpdateLoopButton();
-            UpdateShuffleButton();
 
             if (state.PlaylistPaths.Count > 0)
                 _vm.Playlist.AddFiles(state.PlaylistPaths.Where(File.Exists));
@@ -87,7 +81,6 @@ namespace MusicVisualizer
             if (_vm.Playlist.Tracks.Count > 0)
             {
                 var (targetIndex, startPos) = PlaylistRestorer.Compute(_vm.Playlist.Tracks, state);
-
                 await _vm.PlayAt(targetIndex, autoPlay: false, startPosition: startPos);
                 PlaylistList.SelectedIndex = targetIndex;
 
@@ -122,9 +115,9 @@ namespace MusicVisualizer
             CompositionTarget.Rendering -= OnRendering;
 
             var currentTrack = (_vm.Playlist.CurrentIndex >= 0 &&
-                    _vm.Playlist.CurrentIndex < _vm.Playlist.Tracks.Count)
-    ? _vm.Playlist.Tracks[_vm.Playlist.CurrentIndex].FilePath
-    : null;
+                                _vm.Playlist.CurrentIndex < _vm.Playlist.Tracks.Count)
+                ? _vm.Playlist.Tracks[_vm.Playlist.CurrentIndex].FilePath
+                : null;
 
             _stateService.Save(new AppState
             {
@@ -134,8 +127,8 @@ namespace MusicVisualizer
                 VisualizationName = (ModeSelector.SelectedItem as IVisualizationMode)?.Name,
                 Volume = VolumeSlider.Value,
                 PositionSeconds = (currentTrack != null && _vm.Engine.TotalTime.TotalSeconds > 0)
-        ? _vm.Engine.Position.TotalSeconds
-        : 0,
+                    ? _vm.Engine.Position.TotalSeconds
+                    : 0,
                 LoopMode = _vm.LoopMode.ToString(),
                 Shuffle = _vm.Shuffle
             });
@@ -144,7 +137,86 @@ namespace MusicVisualizer
             _vm.Engine.Dispose();
         }
 
-        // ─── Верхняя панель ──────────────────────────────────────────
+        // ─── Транспорт ────────────────────────────────────────────
+
+        private void PlayPause_Click(object sender, RoutedEventArgs e)
+        {
+            if (_vm.IsPlaying) _vm.Pause(); else _vm.Play();
+        }
+
+        private void Stop_Click(object sender, RoutedEventArgs e) => _vm.Stop();
+
+        private async void PreviousTrack_Click(object sender, RoutedEventArgs e) =>
+            await _vm.PlayPrevious();
+
+        private async void NextTrack_Click(object sender, RoutedEventArgs e) =>
+            await _vm.PlayNext();
+
+        private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
+            _vm.SetVolume((float)e.NewValue);
+
+        private void ProgressSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressProgressChanged) return;
+            _vm.Seek(e.NewValue);
+        }
+
+        private void ModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ModeSelector.SelectedItem is IVisualizationMode mode)
+                VisualizerControl.CurrentMode = mode;
+        }
+
+        private void LoopButton_Click(object sender, RoutedEventArgs e)
+        {
+            _vm.LoopMode = _vm.LoopMode switch
+            {
+                LoopMode.Off => LoopMode.All,
+                LoopMode.All => LoopMode.One,
+                _ => LoopMode.Off
+            };
+        }
+
+        private void ShuffleButton_Click(object sender, RoutedEventArgs e) => _vm.Shuffle = !_vm.Shuffle;
+
+        private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            var focused = Keyboard.FocusedElement;
+            if (focused is TextBox) return;
+            if (focused is ComboBox cb && cb.IsDropDownOpen &&
+                (e.Key == Key.Up || e.Key == Key.Down || e.Key == Key.Enter || e.Key == Key.Escape))
+                return;
+
+            switch (e.Key)
+            {
+                case Key.Space:
+                    if (_vm.IsPlaying) _vm.Pause(); else _vm.Play();
+                    e.Handled = true;
+                    break;
+                case Key.Left:
+                    _vm.SeekRelative(TimeSpan.FromSeconds(-5));
+                    e.Handled = true;
+                    break;
+                case Key.Right:
+                    _vm.SeekRelative(TimeSpan.FromSeconds(5));
+                    e.Handled = true;
+                    break;
+                case Key.Up:
+                    VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + 0.05, 0, 1);
+                    e.Handled = true;
+                    break;
+                case Key.Down:
+                    VolumeSlider.Value = Math.Clamp(VolumeSlider.Value - 0.05, 0, 1);
+                    e.Handled = true;
+                    break;
+                case Key.Delete:
+                    await SafeDeleteSelectedAsync();
+                    e.Handled = true;
+                    break;
+            }
+        }
+
+        // ─── Файлы и очередь ──────────────────────────────────────
 
         private async void OpenFile_Click(object sender, RoutedEventArgs e)
         {
@@ -166,44 +238,21 @@ namespace MusicVisualizer
                 await _vm.PlayAt(0);
         }
 
-        private void Play_Click(object sender, RoutedEventArgs e) => _vm.Play();
-        private void Pause_Click(object sender, RoutedEventArgs e) => _vm.Pause();
-        private void Stop_Click(object sender, RoutedEventArgs e) => _vm.Stop();
-
-        private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
-            _vm.SetVolume((float)e.NewValue);
-
-        private void ProgressSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressProgressChanged) return;
-            _vm.Seek(e.NewValue);
-        }
-
-        private void ModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (ModeSelector.SelectedItem is IVisualizationMode mode)
-                VisualizerControl.CurrentMode = mode;
-        }
-
-        // ─── Очередь ────────────────────────────────────────────────
-
         private async void PlaylistList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (PlaylistList.SelectedIndex >= 0)
                 await _vm.PlayAt(PlaylistList.SelectedIndex);
         }
-
-        private async void RemoveTrack_Click(object sender, RoutedEventArgs e) =>
-    await DeleteTrackAt(PlaylistList.SelectedIndex);
-
-        private async Task DeleteTrackAt(int index)
+                
+        private async Task SafeDeleteSelectedAsync()
         {
-            if (index < 0 || index >= _vm.Playlist.Tracks.Count) return;
+            int idx = PlaylistList.SelectedIndex;
+            if (idx < 0) return;
 
-            bool wasCurrent = index == _vm.Playlist.CurrentIndex;
+            bool wasCurrent = idx == _vm.Playlist.CurrentIndex;
             bool wasPlaying = _vm.Engine.IsPlaying;
 
-            _vm.Playlist.RemoveAt(index);
+            _vm.Playlist.RemoveAt(idx);
 
             if (_vm.Playlist.Tracks.Count == 0)
             {
@@ -228,9 +277,9 @@ namespace MusicVisualizer
             ProgressSlider.Value = 0;
             _suppressProgressChanged = false;
             TimeLabel.Text = "00:00 / 00:00";
+            PlaylistList.SelectedIndex = -1;
 
             VisualizerControl.ClearData();
-            PlaylistList.SelectedIndex = -1;
         }
 
         private void SavePlaylist_Click(object sender, RoutedEventArgs e)
@@ -243,8 +292,7 @@ namespace MusicVisualizer
             if (dialog.ShowDialog() != true) return;
             try
             {
-                M3UService.Save(dialog.FileName,
-                    _vm.Playlist.Tracks.Select(t => t.FilePath));
+                M3UService.Save(dialog.FileName, _vm.Playlist.Tracks.Select(t => t.FilePath));
             }
             catch (Exception ex)
             {
@@ -283,7 +331,27 @@ namespace MusicVisualizer
             }
         }
 
-        // ─── Drag-and-drop: из проводника на окно ───────────────────
+        // ─── Контекстное меню ─────────────────────────────────────
+
+        private async void ContextPlay_Click(object sender, RoutedEventArgs e)
+        {
+            int idx = PlaylistList.SelectedIndex;
+            if (idx >= 0) await _vm.PlayAt(idx);
+        }
+
+        private async void ContextDelete_Click(object sender, RoutedEventArgs e) =>
+            await SafeDeleteSelectedAsync();
+
+        private void ContextShowInExplorer_Click(object sender, RoutedEventArgs e)
+        {
+            int idx = PlaylistList.SelectedIndex;
+            if (idx < 0 || idx >= _vm.Playlist.Tracks.Count) return;
+            var path = _vm.Playlist.Tracks[idx].FilePath;
+            if (!File.Exists(path)) return;
+            Process.Start("explorer.exe", $"/select,\"{path}\"");
+        }
+
+        // ─── Drag-and-drop ────────────────────────────────────────
 
         private void Window_DragEnter(object sender, DragEventArgs e)
         {
@@ -299,10 +367,8 @@ namespace MusicVisualizer
         {
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
             var files = ((string[])e.Data.GetData(DataFormats.FileDrop))
-                .Where(IsAudioFile)
-                .ToArray();
-            if (files.Length > 0)
-                await AddFilesToPlaylistAsync(files);
+                .Where(IsAudioFile).ToArray();
+            if (files.Length > 0) await AddFilesToPlaylistAsync(files);
         }
 
         private static bool IsAudioFile(string path)
@@ -311,12 +377,15 @@ namespace MusicVisualizer
             return ext is ".mp3" or ".wav" or ".flac" or ".ogg" or ".m4a" or ".aac" or ".aiff" or ".aif";
         }
 
-        // ─── Drag-and-drop: перестановка внутри ListBox ─────────────
-
         private void PlaylistList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             _dragStartPoint = e.GetPosition(null);
             _dragSourceIndex = GetIndexUnderMouse(e.GetPosition(PlaylistList));
+        }
+        private void PlaylistList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            int idx = GetIndexUnderMouse(e.GetPosition(PlaylistList));
+            if (idx >= 0) PlaylistList.SelectedIndex = idx;
         }
 
         private void PlaylistList_PreviewMouseMove(object sender, MouseEventArgs e)
@@ -354,8 +423,7 @@ namespace MusicVisualizer
             {
                 var files = ((string[])e.Data.GetData(DataFormats.FileDrop))
                     .Where(IsAudioFile).ToArray();
-                if (files.Length > 0)
-                    await AddFilesToPlaylistAsync(files);
+                if (files.Length > 0) await AddFilesToPlaylistAsync(files);
             }
 
             _dragSourceIndex = -1;
@@ -370,76 +438,6 @@ namespace MusicVisualizer
             return element is ListBoxItem item
                 ? PlaylistList.ItemContainerGenerator.IndexFromContainer(item)
                 : -1;
-        }
-
-        private void UpdateLoopButton()
-        {
-            LoopButton.Content = _vm.LoopMode switch
-            {
-                LoopMode.Off => "Цикл: Выкл",
-                LoopMode.All => "Цикл: Все",
-                _ => "Цикл: Один"
-            };
-        }
-
-        private void LoopButton_Click(object sender, RoutedEventArgs e)
-        {
-            _vm.LoopMode = _vm.LoopMode switch
-            {
-                LoopMode.Off => LoopMode.All,
-                LoopMode.All => LoopMode.One,
-                _ => LoopMode.Off
-            };
-            UpdateLoopButton();
-        }
-
-        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
-        {
-            var focused = Keyboard.FocusedElement;
-            if (focused is TextBox) return;
-            if (focused is ComboBox cb && cb.IsDropDownOpen &&
-                (e.Key == Key.Up || e.Key == Key.Down || e.Key == Key.Enter || e.Key == Key.Escape))
-                return;
-
-            switch (e.Key)
-            {
-                case Key.Space:
-                    if (_vm.Engine.IsPlaying) _vm.Pause(); else _vm.Play();
-                    e.Handled = true;
-                    break;
-                case Key.Left:
-                    _vm.SeekRelative(TimeSpan.FromSeconds(-5));
-                    e.Handled = true;
-                    break;
-                case Key.Right:
-                    _vm.SeekRelative(TimeSpan.FromSeconds(5));
-                    e.Handled = true;
-                    break;
-                case Key.Up:
-                    VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + 0.05, 0, 1);
-                    e.Handled = true;
-                    break;
-                case Key.Down:
-                    VolumeSlider.Value = Math.Clamp(VolumeSlider.Value - 0.05, 0, 1);
-                    e.Handled = true;
-                    break;
-                case Key.Delete:
-                    DeleteTrackAt(PlaylistList.SelectedIndex);
-                    e.Handled = true;
-                    break;
-            }
-        }
-
-        private void UpdateShuffleButton()
-        {
-            ShuffleButton.Content = _vm.Shuffle ? "Перемешать: Вкл" : "Перемешать: Выкл";
-            ShuffleButton.FontWeight = _vm.Shuffle ? FontWeights.Bold : FontWeights.Normal;
-        }
-
-        private void ShuffleButton_Click(object sender, RoutedEventArgs e)
-        {
-            _vm.Shuffle = !_vm.Shuffle;
-            UpdateShuffleButton();
         }
     }
 }

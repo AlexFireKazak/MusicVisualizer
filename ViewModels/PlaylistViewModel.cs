@@ -3,6 +3,9 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Linq;
+using System.Threading.Tasks;
+using MusicVisualizer.Core;
 
 namespace MusicVisualizer.ViewModels
 {
@@ -31,10 +34,32 @@ namespace MusicVisualizer.ViewModels
 
         public void AddFiles(IEnumerable<string> paths)
         {
+            var added = new List<TrackItem>();
             foreach (var p in paths)
             {
                 if (!File.Exists(p)) continue;
-                Tracks.Add(new TrackItem { FilePath = p, Name = Path.GetFileName(p) });
+                var item = new TrackItem { FilePath = p, Name = Path.GetFileName(p) };
+                Tracks.Add(item);
+                added.Add(item);
+            }
+            if (added.Count > 0)
+                _ = FillDurationsAsync(added);
+        }
+
+        /// <summary>
+        /// Читает длительности последовательно в фоне. По одному треку,
+        /// чтобы не забивать диск параллельными открытиями. Каждый результат
+        /// сразу проступает в UI через INotifyPropertyChanged.
+        /// </summary>
+        private static async Task FillDurationsAsync(List<TrackItem> items)
+        {
+            foreach (var item in items)
+            {
+                if (item.Duration.HasValue) continue;
+
+                var duration = await Task.Run(() => TrackMetadataService.TryGetDuration(item.FilePath));
+                if (duration.HasValue)
+                    item.Duration = duration;
             }
         }
 
