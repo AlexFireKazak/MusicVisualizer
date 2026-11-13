@@ -14,6 +14,8 @@ namespace MusicVisualizer.ViewModels
         public double Volume { get; set; } = 0.5;
         public double PositionSeconds { get; set; }
         public string? CurrentTrackPath { get; set; }
+        public string? LoopMode { get; set; }
+        public bool Shuffle { get; set; }
     }
 
     public class AppStateService

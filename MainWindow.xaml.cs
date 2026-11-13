@@ -27,6 +27,8 @@ namespace MusicVisualizer
         {
             InitializeComponent();
             DataContext = _vm;
+            UpdateLoopButton();
+            UpdateShuffleButton();
 
             _modes.Add(new SpectrumBarsMode());
             _modes.Add(new MirroredBarsMode());
@@ -60,6 +62,10 @@ namespace MusicVisualizer
             var state = _stateService.Load();
 
             VolumeSlider.Value = Math.Clamp(state.Volume, 0, 1);
+            if (Enum.TryParse<LoopMode>(state.LoopMode, out var lm)) _vm.LoopMode = lm;
+            _vm.Shuffle = state.Shuffle;
+            UpdateLoopButton();
+            UpdateShuffleButton();
 
             if (state.PlaylistPaths.Count > 0)
             {
@@ -149,8 +155,10 @@ namespace MusicVisualizer
                 VisualizationName = (ModeSelector.SelectedItem as IVisualizationMode)?.Name,
                 Volume = VolumeSlider.Value,
                 PositionSeconds = (currentTrack != null && _vm.Engine.TotalTime.TotalSeconds > 0)
-                    ? _vm.Engine.Position.TotalSeconds
-                    : 0
+        ? _vm.Engine.Position.TotalSeconds
+        : 0,
+                LoopMode = _vm.LoopMode.ToString(),
+                Shuffle = _vm.Shuffle
             });
 
             foreach (var mode in _modes) mode.Dispose();
@@ -209,15 +217,6 @@ namespace MusicVisualizer
         private void RemoveTrack_Click(object sender, RoutedEventArgs e) =>
     DeleteTrackAt(PlaylistList.SelectedIndex);
 
-        private void PlaylistList_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.Delete)
-            {
-                DeleteTrackAt(PlaylistList.SelectedIndex);
-                e.Handled = true;
-            }
-        }
-
         private void DeleteTrackAt(int index)
         {
             if (index < 0 || index >= _vm.Playlist.Tracks.Count) return;
@@ -235,11 +234,11 @@ namespace MusicVisualizer
 
             if (wasCurrent)
             {
-                // Перезагружаем новый текущий с 0 — плеер больше не держит удалённый стрим
                 int newIdx = Math.Clamp(_vm.Playlist.CurrentIndex, 0, _vm.Playlist.Tracks.Count - 1);
                 _vm.PlayAt(newIdx, autoPlay: wasPlaying);
-                PlaylistList.SelectedIndex = newIdx;
             }
+            // В любом случае возвращаем выделение на текущий играющий трек
+            PlaylistList.SelectedIndex = _vm.Playlist.CurrentIndex;
         }
 
         private void ClearPlaylist_Click(object sender, RoutedEventArgs e)
@@ -252,6 +251,7 @@ namespace MusicVisualizer
             TimeLabel.Text = "00:00 / 00:00";
 
             VisualizerControl.ClearData();
+            PlaylistList.SelectedIndex = -1;
         }
 
         private void SavePlaylist_Click(object sender, RoutedEventArgs e)
@@ -383,6 +383,76 @@ namespace MusicVisualizer
             return element is ListBoxItem item
                 ? PlaylistList.ItemContainerGenerator.IndexFromContainer(item)
                 : -1;
+        }
+
+        private void UpdateLoopButton()
+        {
+            LoopButton.Content = _vm.LoopMode switch
+            {
+                LoopMode.Off => "Цикл: Выкл",
+                LoopMode.All => "Цикл: Все",
+                _ => "Цикл: Один"
+            };
+        }
+
+        private void LoopButton_Click(object sender, RoutedEventArgs e)
+        {
+            _vm.LoopMode = _vm.LoopMode switch
+            {
+                LoopMode.Off => LoopMode.All,
+                LoopMode.All => LoopMode.One,
+                _ => LoopMode.Off
+            };
+            UpdateLoopButton();
+        }
+
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            var focused = Keyboard.FocusedElement;
+            if (focused is TextBox) return;
+            if (focused is ComboBox cb && cb.IsDropDownOpen &&
+                (e.Key == Key.Up || e.Key == Key.Down || e.Key == Key.Enter || e.Key == Key.Escape))
+                return;
+
+            switch (e.Key)
+            {
+                case Key.Space:
+                    if (_vm.Engine.IsPlaying) _vm.Pause(); else _vm.Play();
+                    e.Handled = true;
+                    break;
+                case Key.Left:
+                    _vm.SeekRelative(TimeSpan.FromSeconds(-5));
+                    e.Handled = true;
+                    break;
+                case Key.Right:
+                    _vm.SeekRelative(TimeSpan.FromSeconds(5));
+                    e.Handled = true;
+                    break;
+                case Key.Up:
+                    VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + 0.05, 0, 1);
+                    e.Handled = true;
+                    break;
+                case Key.Down:
+                    VolumeSlider.Value = Math.Clamp(VolumeSlider.Value - 0.05, 0, 1);
+                    e.Handled = true;
+                    break;
+                case Key.Delete:
+                    DeleteTrackAt(PlaylistList.SelectedIndex);
+                    e.Handled = true;
+                    break;
+            }
+        }
+
+        private void UpdateShuffleButton()
+        {
+            ShuffleButton.Content = _vm.Shuffle ? "Перемешать: Вкл" : "Перемешать: Выкл";
+            ShuffleButton.FontWeight = _vm.Shuffle ? FontWeights.Bold : FontWeights.Normal;
+        }
+
+        private void ShuffleButton_Click(object sender, RoutedEventArgs e)
+        {
+            _vm.Shuffle = !_vm.Shuffle;
+            UpdateShuffleButton();
         }
     }
 }

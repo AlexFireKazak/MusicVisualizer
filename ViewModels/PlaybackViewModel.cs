@@ -1,24 +1,31 @@
 ﻿using MusicVisualizer.Core;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
 
 namespace MusicVisualizer.ViewModels
 {
+    public enum LoopMode { Off, All, One }
+
     public class PlaybackViewModel : INotifyPropertyChanged
     {
         private readonly AudioEngine _engine = new();
         private readonly AudioAnalyzer _analyzer = new();
+        private readonly Random _rand = new();
+        private readonly HashSet<int> _shufflePlayed = new();
 
         private string _title = "Music Visualizer";
         private string _timeText = "00:00 / 00:00";
         private double _progress;
+        private LoopMode _loopMode = LoopMode.Off;
+        private bool _shuffle;
 
         public PlaylistViewModel Playlist { get; } = new();
         public AudioEngine Engine => _engine;
 
-        /// <summary>Срабатывает при загрузке нового трека — сброс визуализаций.</summary>
         public event EventHandler? TrackChanged;
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -26,32 +33,106 @@ namespace MusicVisualizer.ViewModels
         public string TimeText { get => _timeText; private set => Set(ref _timeText, value); }
         public double Progress { get => _progress; private set => Set(ref _progress, value); }
 
+        public LoopMode LoopMode
+        {
+            get => _loopMode;
+            set { if (_loopMode != value) { _loopMode = value; OnPropertyChanged(); } }
+        }
+
+        public bool Shuffle
+        {
+            get => _shuffle;
+            set
+            {
+                if (_shuffle == value) return;
+                _shuffle = value;
+                _shufflePlayed.Clear();
+                OnPropertyChanged();
+            }
+        }
+
         public PlaybackViewModel()
         {
             _engine.TrackEnded += OnEngineTrackEnded;
+            Playlist.Tracks.CollectionChanged += (_, _) => _shufflePlayed.Clear();
         }
 
         private void OnEngineTrackEnded(object? sender, EventArgs e)
         {
-            // Приходит с аудио-потока — пробрасываем на UI
             Application.Current.Dispatcher.Invoke(PlayNext);
         }
 
         public void PlayNext()
         {
-            int next = Playlist.CurrentIndex + 1;
-            if (next >= Playlist.Tracks.Count)
+            if (Playlist.Tracks.Count == 0) return;
+
+            if (LoopMode == LoopMode.One)
             {
-                _engine.Stop();
+                PlayAtInternal(Playlist.CurrentIndex, autoPlay: true,
+                               startPosition: null, resetShuffleCycle: false);
                 return;
             }
-            PlayAt(next);
+
+            int count = Playlist.Tracks.Count;
+
+            if (Shuffle)
+            {
+                PlayShuffleNext(count);
+                return;
+            }
+
+            int next = Playlist.CurrentIndex + 1;
+            if (next >= count)
+            {
+                if (LoopMode == LoopMode.All) next = 0;
+                else { _engine.Stop(); return; }
+            }
+            PlayAtInternal(next, autoPlay: true, startPosition: null, resetShuffleCycle: false);
         }
 
-        public void PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null)
+        private void PlayShuffleNext(int count)
+        {
+            var candidates = Enumerable.Range(0, count)
+                .Where(i => !_shufflePlayed.Contains(i))
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                if (LoopMode == LoopMode.All)
+                {
+                    _shufflePlayed.Clear();
+                    if (count > 1) _shufflePlayed.Add(Playlist.CurrentIndex);
+                    candidates = Enumerable.Range(0, count)
+                        .Where(i => !_shufflePlayed.Contains(i))
+                        .ToList();
+                    if (candidates.Count == 0) candidates.Add(Playlist.CurrentIndex);
+                }
+                else
+                {
+                    _engine.Stop();
+                    return;
+                }
+            }
+
+            int nextIdx = candidates[_rand.Next(candidates.Count)];
+            _shufflePlayed.Add(nextIdx);
+            PlayAtInternal(nextIdx, autoPlay: true, startPosition: null, resetShuffleCycle: false);
+        }
+
+        public void PlayAt(int index, bool autoPlay = true, TimeSpan? startPosition = null) =>
+            PlayAtInternal(index, autoPlay, startPosition, resetShuffleCycle: true);
+
+        private void PlayAtInternal(int index, bool autoPlay, TimeSpan? startPosition, bool resetShuffleCycle)
         {
             if (index < 0 || index >= Playlist.Tracks.Count) return;
             Playlist.CurrentIndex = index;
+
+            if (resetShuffleCycle && Shuffle)
+            {
+                _shufflePlayed.Clear();
+                _shufflePlayed.Add(index);
+            }
+
             var track = Playlist.Tracks[index];
             try
             {
@@ -72,6 +153,18 @@ namespace MusicVisualizer.ViewModels
             }
         }
 
+        public void ClearPlaylist()
+        {
+            _engine.Unload();
+            _analyzer.Reset();
+            Playlist.Clear();
+            _shufflePlayed.Clear();
+            Progress = 0;
+            TimeText = "00:00 / 00:00";
+            Title = "Music Visualizer";
+            TrackChanged?.Invoke(this, EventArgs.Empty);
+        }
+
         public void Play() => _engine.Play();
         public void Pause() => _engine.Pause();
         public void Stop() => _engine.Stop();
@@ -81,6 +174,15 @@ namespace MusicVisualizer.ViewModels
         {
             if (_engine.TotalTime.TotalSeconds <= 0) return;
             _engine.Seek(TimeSpan.FromSeconds(ratio * _engine.TotalTime.TotalSeconds));
+            UpdateFromRendering();
+        }
+
+        public void SeekRelative(TimeSpan delta)
+        {
+            var target = _engine.Position + delta;
+            if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+            if (target > _engine.TotalTime) target = _engine.TotalTime;
+            _engine.Seek(target);
             UpdateFromRendering();
         }
 
@@ -105,18 +207,10 @@ namespace MusicVisualizer.ViewModels
         {
             if (Equals(field, value)) return;
             field = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+            OnPropertyChanged(name);
         }
 
-        public void ClearPlaylist()
-        {
-            _engine.Unload();
-            _analyzer.Reset();
-            Playlist.Clear();
-            Progress = 0;
-            TimeText = "00:00 / 00:00";
-            Title = "Music Visualizer";
-            TrackChanged?.Invoke(this, EventArgs.Empty);
-        }
+        private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 }
